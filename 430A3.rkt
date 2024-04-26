@@ -33,7 +33,13 @@ DEFN	 	=	 	{def : id : id ... : EXPR}
 (define-type ExprC (U NumC BinopC IfLeqO))
 (tstruct NumC ([n : Real]))
 (tstruct BinopC ([op : Sexp][l : ExprC] [r : ExprC])) ; single syntatic rule for all binary and arithmetic operators
+;(tstruct AppC ([fun : Symbol][arg : ExprC])) ; pretty sure this is needed in order for the interpreter to accept 0, 1, or more arguments
 (tstruct IfLeqO ([test : ExprC] [then : ExprC] [else : ExprC]))
+
+(tstruct FunDefC ([name : Symbol]
+                  [param : Symbol]
+                  [body : ExprC]))
+
 
 ; my-divide is a helper function for the op table to throw a
 ; divide by zero error in the case of a divide by zero attempt
@@ -52,6 +58,7 @@ DEFN	 	=	 	{def : id : id ... : EXPR}
 
 
 ; -- Parser --
+
 ; parse takes in an s-expression and returns abstract syntax ExprC 
 (define (parse [sexp : Sexp]) : ExprC
   (match sexp
@@ -59,6 +66,16 @@ DEFN	 	=	 	{def : id : id ... : EXPR}
     [(list op a b) (BinopC op (parse a) (parse b))]
     [(list 'ifleq0? test then else) (IfLeqO (parse test) (parse then) (parse else))]
     [_ (error "ZODE: Invalid syntax")]))
+
+
+; -- Parse a fundef s-expression --
+; parse-fundef takes in an s-expression and returns a FunDefC
+(define (parse-fundef [sexp : Sexp]) : FunDefC
+  (match sexp
+    [(list 'funct (list (? symbol? fun) (? symbol? param))
+                   body)
+                   (FunDefC fun param (parse body))]
+    [other (error 'parse-fundef "ZODE: Invalid s-expression to parse to FunDefC ~e" other)]))
 
 
 ; -- Interpreter -- 
@@ -87,6 +104,7 @@ DEFN	 	=	 	{def : id : id ... : EXPR}
 (check-equal? (parse '(* 4 5)) (BinopC '* (NumC 4) (NumC 5)))
 (check-equal? (parse '(- 6 3)) (BinopC '- (NumC 6) (NumC 3)))
 (check-equal? (parse '(/ 9 3)) (BinopC '/ (NumC 9) (NumC 3)))
+(check-exn #px"ZODE" (λ () (parse '(/ 9 0)))) ; check for error when attempting to do a division by 0
 
 (check-equal? (interp (parse '(ifleq0? 1 1 (- 1 1)))) 0 "Positive x decremented")
 

@@ -34,6 +34,20 @@
     ['* #t]
     [other #f]))
 
+; Keyword, used in parser
+
+(define (keyword? [name : Symbol]) : Boolean
+  (match name
+    ['/ #t]
+    ['+ #t]
+    ['- #t]
+    ['* #t]
+    ['fun #t]
+    ['ifLeq0? #t]
+    [': #t]
+    ['else: #t]
+    [other #f]))
+
 ; Checks if is an ifLeq0? 
 (define (is-an-if? [f : Sexp]) : Boolean
   (equal? f 'ifLeq0?))
@@ -66,7 +80,12 @@
 (check-exn (regexp (regexp-quote "ZODE: parse: bad expression. got '()"))
            (lambda () (parse '())))
 
+(check-exn (regexp (regexp-quote "ZODE: parse: invalid operation in BinOp, got '^"))
+           (lambda () (parse '(^ 2 3))))
 
+(check-exn exn:fail? (lambda () (parse '())))
+
+(check-exn exn:fail? (lambda () (parse '(+ fun (3)))))
 
 ; Parse FundefC
 
@@ -80,6 +99,9 @@
      (error 'parse-fundef "ZODE: Too many arguments in function definition, ~s" s)]
     [other
      (error 'parse-fundef "ZODE: Invalid function definition format, got ~a" other)]))
+
+
+(check-exn exn:fail? (lambda () (parse-fundef '())))
 
 ; Parse-prog (list of funcitons in ZODE, call parse-fundefC recursively)
 
@@ -123,10 +145,10 @@
     [other (error 'parse "ZODE subst: bad expression. got ~e" other)]))
 
 
-(check-equal? (subst (NumC 2) ;what
-                     'x       ;for
-                     (IdC 'x));expr
-                     (NumC 2));eval
+(check-equal? (subst (NumC 2) ; What
+                     'x       ; For
+                     (IdC 'x)); Expr
+                     (NumC 2)); Eval
 
 (check-equal? (subst (NumC 2)
                      'x
@@ -209,8 +231,8 @@
 
 (define double-fun (FunDefC 'double-fun 'x (BinOpC '* (IdC 'x) (NumC 2))))
 
-(check-equal? (interp (AppC 'double-fun (BinOpC '* (NumC 2) (NumC 2))) (list double-fun))
-              8)
+(check-equal? (interp (AppC 'double-fun (BinOpC '* (NumC 4) (NumC 4))) (list double-fun))
+              32)
 
 (check-equal? (interp (parse '{* {+ 2 4} 5}) '())
               30) 

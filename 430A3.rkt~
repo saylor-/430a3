@@ -1,0 +1,140 @@
+; Jonathan Zoccola - Assignment 3 PL
+#lang typed/racket
+(require typed/rackunit)
+
+; defined syntax for tstruct, eliminates the need
+; to put #:transparent at the end of every struct.
+(define-syntax tstruct
+    (syntax-rules ()
+      [(_ name fields)
+       (struct name fields #:transparent)]))
+
+(provide tstruct)
+
+; -- ZODE3 Language --
+
+
+(define-type ExprC (U NumC BinOpC ifleq0? FunDefC AppC))
+(tstruct NumC ([n : Real]))
+(tstruct BinOpC ([op : Symbol] [l : ExprC] [r : ExprC]))
+(tstruct ifleq0? ([guard : ExprC] [then : ExprC] [else : ExprC]))
+
+(tstruct FunDefC ([name : Symbol] [arg : Symbol] [body : ExprC]))
+
+(tstruct AppC  ([fun : Symbol] [arg : ExprC]))
+
+
+; Syntax for the ZODE3 Language in EBNF Notation:
+
+;;   EXPR	 =	        num
+;;  	 	|	 	{+ EXPR EXPR}
+;;  	 	|	 	{- EXPR EXPR}
+;;  	 	|	 	{* EXPR EXPR}
+;;  	 	|	 	{/ EXPR EXPR}
+;;  	 	|	 	{id EXPR ...}
+;;  	 	|	 	{ifleq0? : EXPR : EXPR : EXPR}
+;;  	 	|	 	id
+;;   DEFN	 =	        {def : id : id ... : EXPR}
+
+
+; valid-binop takes in an operator and returns true if the operator
+; is valid in the ZODE3 language and false otherwise
+(define (valid-binop? [op : Symbol]) : Boolean
+  (match op
+    ['+ #t]
+    ['- #t]
+    ['* #t]
+    ['/ #t]
+    [else #f]))
+
+
+; TODO: ----- Need to add prevention for division by zero -----
+
+
+; -- Parser for ZODE3 --
+
+; parse takes in an s-expression and returns an ExprC if the
+; given s-expression can be transformed into one. Error otherwise.
+(define (parse [sexp : Sexp]) : ExprC
+  (match sexp
+    [(? real? r) (NumC r)]
+    [(list op a b)
+     (if (and (symbol? op) (valid-binop? op)) ; guard, (we also check in interp for division by zero and an invalid operator)
+        (BinOpC op (parse a) (parse b)) ; then
+        (error 'parse "ZODE : invalid binary operator, got ~e" op))] ; else
+    [(list 'ifleq0? guard then else) (ifleq0? (parse guard) (parse then) (parse else))]
+    [(list (? symbol? name) arg) (AppC name (parse arg))]
+    [else (error 'parse "ZODE : expected s-expression, got ~e" sexp)]))
+
+
+; Parse a fundef
+; Parse-fundef takes in Sexp and returns a FunDefC
+(define (parse-fundef [sexp : Sexp]) : FunDefC
+  (match sexp
+    [(list (? symbol? name) (? symbol? arg) body)
+                   (FunDefC name arg (parse body))]
+    [other (error 'parse-fundef "ZODE: Not a valid fundef ~e" other)]))
+
+
+; interp takes in an ExprC and returns a Real
+(define (interp [e : ExprC] [fds : (Listof FunDefC)]) : Real
+  (match e
+    [(NumC n) n]
+    [(BinOpC op a b)
+       (match op
+       ['+ (+ (interp a fds) (interp b fds))]
+       ['- (- (interp a fds) (interp b fds))]
+       ['* (* (interp a fds) (interp b fds))]
+       ['/ (if (zero? (interp b fds)) ; guard
+              (error 'interp "ZODE : unable to perform division by zero") ;then
+              (/ (interp a fds) (interp b fds)))] ;else
+       [other (error 'interp "ZODE : unknown operator")])]
+    [(ifleq0? guard then else)
+        (if (<= (interp guard fds) 0)
+        (interp then fds)
+        (interp else fds))]
+    [(AppC fun arg) 4]))
+
+; top-interp takes in an s-expression and calls the parser and interp
+(define (top-interp [s : Sexp]) : Real
+  (interp (parse s)))
+
+; --------- test-cases for all functions -----------
+
+; test-cases for valid-binop:
+(check-equal? (valid-binop? '+) #t)
+(check-equal? (valid-binop? '-) #t)
+(check-equal? (valid-binop? '*) #t)
+(check-equal? (valid-binop? '/) #t)
+(check-equal? (valid-binop? 'a) #f)
+(check-equal? (valid-binop? '//) #f)
+
+
+; test-cases for parse:
+(check-equal? (parse 5) (NumC 5))
+(check-equal? (parse '(+ 6 5)) (BinOpC '+ (NumC 6) (NumC 5)))
+(check-equal? (parse '(ifleq0? 4 5 6)) (ifleq0? (NumC 4) (NumC 5) (NumC 6)))
+(check-exn (regexp (regexp-quote "ZODE : expected s-expression"))
+           (lambda () (parse 'a)))
+(check-exn (regexp (regexp-quote "ZODE : invalid binary"))
+           (lambda () (parse '(4 5 6))))
+
+
+; test-cases for interp:
+(check-equal? (interp (NumC 4)) 4)
+(check-equal? (interp (BinOpC '+ (NumC 6) (NumC 4))) 10)
+(check-equal? (interp (BinOpC '- (NumC 6) (NumC 4))) 2)
+(check-equal? (interp (BinOpC '* (NumC 6) (NumC 4))) 24)
+(check-equal? (interp (BinOpC '/ (NumC 6) (NumC 3))) 2)
+(check-equal? (interp (BinOpC '/ (NumC 0) (NumC 3))) 0)
+(check-equal? (interp (ifleq0? (NumC 4) (NumC 1) (NumC 0))) 0)
+(check-equal? (interp (ifleq0? (NumC 0) (NumC 1) (NumC 0))) 1)
+
+(check-exn (regexp (regexp-quote "ZODE : unable"))
+           (lambda () (interp (BinOpC '/ (NumC 6) (NumC 0)))))
+(check-exn (regexp (regexp-quote "ZODE : unknown operator"))
+           (lambda () (interp (BinOpC '// (NumC 5) (NumC 5)))))
+
+
+; test-cases for top-interp:
+(check-equal? (top-interp 4) 4)

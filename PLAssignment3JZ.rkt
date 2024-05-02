@@ -17,7 +17,7 @@
 
 (define-type ExprC (U NumC BinOpC ifleq0? AppC))
 (tstruct NumC ([n : Real]))
-(tstruct AppC  ([fun : Symbol] [arg : ExprC]))
+(tstruct AppC  ([fun : Symbol] [args : ExprC]))
 (tstruct BinOpC ([op : Symbol] [l : ExprC] [r : ExprC]))
 (tstruct ifleq0? ([guard : ExprC] [then : ExprC] [else : ExprC]))
 
@@ -115,7 +115,7 @@
 (define (get-fundef [n : Symbol] [fds : (Listof FunDefC)]) : FunDefC
   (cond
     [(empty? fds)
-     (error 'get-fundef "reference to undefined function")]
+     (error 'get-fundef "ZODE : reference to undefined function")]
     [(cons? fds)
      (cond
        [(equal? n (FunDefC-name (first fds))) (first fds)]
@@ -151,7 +151,8 @@
 (check-exn (regexp (regexp-quote "ZODE : invalid binary"))
            (lambda () (parse '(4 5 6))))
 
-; fundefList is a variable with a list of fundef's so we can pass in a list of fundef's into our functions for test cases easily
+; fundefList is a variable with a list of fundef's so we can
+; pass in a list of fundef's into our functions for test cases easily
 (define fundefList (list (FunDefC 'foo 'a (NumC 4))
                      (FunDefC 'throw_ball 'b (BinOpC '+ (NumC 5) (NumC 8)))))
 

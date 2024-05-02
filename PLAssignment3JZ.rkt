@@ -15,8 +15,9 @@
 
 (tstruct FunDefC ([name : Symbol] [arg : Symbol] [body : ExprC]))
 
-(define-type ExprC (U NumC BinOpC ifleq0?))
+(define-type ExprC (U NumC BinOpC ifleq0? AppC))
 (tstruct NumC ([n : Real]))
+(tstruct AppC  ([fun : Symbol] [arg : ExprC]))
 (tstruct BinOpC ([op : Symbol] [l : ExprC] [r : ExprC]))
 (tstruct ifleq0? ([guard : ExprC] [then : ExprC] [else : ExprC]))
 
@@ -60,30 +61,75 @@
         (BinOpC op (parse a) (parse b)) ; then
         (error 'parse "ZODE : invalid binary operator, got ~e" op))] ; else
     [(list 'ifleq0? guard then else) (ifleq0? (parse guard) (parse then) (parse else))]
+    [(list (? symbol? fname) arg) (AppC fname (parse arg))]
     [else (error 'parse "ZODE : expected s-expression, got ~e" sexp)]))
 
 
+; -- Parser for fundef s-expressions --
+
+
 ; interp takes in an ExprC and returns a Real
-(define (interp [e : ExprC]) : Real
+;; (define (interp [e : ExprC]) : Real
+;;   (match e
+;;     [(NumC n) n]
+;;     [(BinOpC op a b)
+;;        (match op
+;;        ['+ (+ (interp a) (interp b))]
+;;        ['- (- (interp a) (interp b))]
+;;        ['* (* (interp a) (interp b))]
+;;        ['/ (if (zero? (interp b)) ; guard
+;;               (error 'interp "ZODE : unable to perform division by zero") ;then
+;;               (/ (interp a) (interp b)))] ;else
+;;        [other (error 'interp "ZODE : unknown operator")])]
+;;     [(ifleq0? guard then else)
+;;         (if (<= (interp guard) 0)
+;;         (interp then)
+;;         (interp else))]))
+
+
+(define (interp [e : ExprC] [fds : (Listof FunDefC)]) : Real
   (match e
     [(NumC n) n]
     [(BinOpC op a b)
        (match op
-       ['+ (+ (interp a) (interp b))]
-       ['- (- (interp a) (interp b))]
-       ['* (* (interp a) (interp b))]
-       ['/ (if (zero? (interp b)) ; guard
-              (error 'interp "ZODE: interp: unable to perform division by zero") ;then
-              (/ (interp a) (interp b)))] ;else
-       [other (error 'interp "ZODE: interp: unsupported operator")])]
+       ['+ (+ (interp a fds) (interp b fds))]
+       ['- (- (interp a fds) (interp b fds))]
+       ['* (* (interp a fds) (interp b fds))]
+       ['/ (if (zero? (interp b fds)) ; guard
+              (error 'interp "ZODE : unable to perform division by zero") ;then
+              (/ (interp a fds) (interp b fds)))] ;else
+       [other (error 'interp "ZODE : unknown operator")])]
     [(ifleq0? guard then else)
-        (if (<= (interp guard) 0)
-        (interp then)
-        (interp else))]))
+        (if (<= (interp guard fds) 0)
+        (interp then fds)
+        (interp else fds))]
+    [(AppC f a) (define fd (get-fundef f fds))
+                (interp (subst a
+                               (FunDefC-arg fd)
+                               (FunDefC-body fd))
+                        fds)]))
+
+
+; get-fundef takes in a function name and a
+; list of FunDefC and returns the FunDefC that matches n
+(define (get-fundef [n : Symbol] [fds : (Listof FunDefC)]) : FunDefC
+  (cond
+    [(empty? fds)
+     (error 'get-fundef "reference to undefined function")]
+    [(cons? fds)
+     (cond
+       [(equal? n (FunDefC-name (first fds))) (first fds)]
+       [else (get-fundef n (rest fds))])]))
+
+; subst takes in a BExprC, a Symbol, and another BExprC and returns a BExprC.
+(define (subst [what : ExprC] [for : Symbol] [in : ExprC]) : ExprC
+  (match in
+    [(NumC n) in]
+    [(AppC f a) (AppC f (subst what for a))]))
 
 ; top-interp takes in an s-expression and calls the parser and interp
-(define (top-interp [s : Sexp]) : Real
-  (interp (parse s)))
+;; (define (top-interp [s : Sexp]) : Real
+;;   (interp (parse-prog s)))
 
 ; --------- test-cases for all functions -----------
 
@@ -105,8 +151,25 @@
 (check-exn (regexp (regexp-quote "ZODE : invalid binary"))
            (lambda () (parse '(4 5 6))))
 
+; fundefList is a variable with a list of fundef's so we can pass in a list of fundef's into our functions for test cases easily
+(define fundefList (list (FunDefC 'foo 'a (NumC 4))
+                     (FunDefC 'throw_ball 'b (BinOpC '+ (NumC 5) (NumC 8)))))
+
+
 ; test-cases for interp:
+(check-equal? (interp (NumC 4) fundefList) 4)
+(check-equal? (interp (BinOpC '+ (NumC 6) (NumC 4)) fundefList) 10)
+(check-equal? (interp (BinOpC '- (NumC 6) (NumC 4)) fundefList) 2)
+(check-equal? (interp (BinOpC '* (NumC 6) (NumC 4)) fundefList) 24)
+(check-equal? (interp (BinOpC '/ (NumC 6) (NumC 3)) fundefList) 2)
+(check-equal? (interp (BinOpC '/ (NumC 0) (NumC 3)) fundefList) 0)
+(check-equal? (interp (ifleq0? (NumC 4) (NumC 1) (NumC 0)) fundefList) 0)
+(check-equal? (interp (ifleq0? (NumC 0) (NumC 1) (NumC 0)) fundefList) 1)
+(check-exn (regexp (regexp-quote "ZODE : unable"))
+           (lambda () (interp (BinOpC '/ (NumC 6) (NumC 0)) fundefList)))
+(check-exn (regexp (regexp-quote "ZODE : unknown operator"))
+           (lambda () (interp (BinOpC '// (NumC 5) (NumC 5)) fundefList)))
 
 
 ; test-cases for top-interp:
-(check-equal? (top-interp 4) 4)
+; (check-equal? (top-interp 4) 4)

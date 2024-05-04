@@ -13,7 +13,7 @@
 
 ; -- ZODE3 Language --
 
-(tstruct FunDefC ([name : Symbol] [arg : Symbol] [body : ExprC]))
+(tstruct FunDefC ([name : Symbol] [args : (Listof Symbol)] [body : ExprC]))
 
 (define-type ExprC (U NumC BinOpC ifleq0? AppC))
 (tstruct NumC ([n : Real]))
@@ -37,7 +37,7 @@
 
 ; valid-binop takes in an operator and returns true if the operator
 ; is valid in the ZODE3 language and false otherwise
-(define (valid-binop? [op : Symbol]) : Boolean
+(define (valid-binop? [op : Sexp]) : Boolean
   (match op
     ['+ #t]
     ['- #t]
@@ -56,12 +56,12 @@
 (define (parse [sexp : Sexp]) : ExprC
   (match sexp
     [(? real? r) (NumC r)]
-    [(list op a b)
+    [(list (? valid-binop? op) a b)
      (if (and (symbol? op) (valid-binop? op)) ; guard, (we also check in interp for division by zero and an invalid operator)
         (BinOpC op (parse a) (parse b)) ; then
         (error 'parse "ZODE : invalid binary operator, got ~e" op))] ; else
     [(list 'ifleq0? guard then else) (ifleq0? (parse guard) (parse then) (parse else))]
-    [(list (? symbol? fname) args)
+    [(list (? symbol? fname) args ...)
      (AppC fname (map parse args))]
     [else (error 'parse "ZODE : expected s-expression, got ~e" sexp)]))
 
@@ -74,10 +74,22 @@
 ; -- Parser for fundef s-expressions --
 (define (parse-fundef [sexp : Sexp]) : FunDefC
   (match sexp
-    [(list 'funct (list (? symbol? fun) (? symbol? param))
-                   body)
-                   (FunDefC fun param (parse body))]
-    [other (error 'parse-fundef "You gave me a busted fundef ~e" other)]))
+    ['() (error 'parse-fundef "ZODE: Error")]
+    [(list 'def (list (? symbol? fun)) (? list? args) body)
+     (let ([symbol-params (ensure-symbol-list args)])  ; Ensure params are all symbols
+       (FunDefC fun symbol-params (parse body)))]
+[other (error 'parse-fundef "ZODE: You gave me a busted fundef ~e" other)]))
+
+; Test cases for fundef
+;(check-equal? (parse-fundef '(def (foo x y) (+ 5 3)))
+;              (FunDefC 'foo '(x y) (BinOpC '+ (NumC 5) (NumC 3))))
+
+; Hopefully fix the andmap thing
+; Function to check if all elements in the list are symbols
+(define (ensure-symbol-list [sexps : (Listof Sexp)]) : (Listof Symbol)
+  (if (andmap symbol? sexps)
+      (cast sexps (Listof Symbol))  ; Casts (Listof Sexp) to (Listof Symbol) if all are symbols
+      (error "ZODE: All elements must be symbols")))
 
 
 ; interp takes in an ExprC and returns a Real
@@ -115,17 +127,45 @@
         (if (<= (interp guard fds) 0)
         (interp then fds)
         (interp else fds))]
-    [(AppC f arg)
-     (if (= 1 (length arg))
-         (let ([fd (get-fundef f fds)]) ; Handle one arg, define stopped working
-                (interp (subst (first arg) ; Just use the first arg
-                               (FunDefC-arg fd)
-                               (FunDefC-body fd))
-                        fds))
-                (error 'interp "ZODE: more than 1"))] ; Error if more than 1
-))
+    [(AppC f a)
+         (let ([fd (get-fundef f fds)])
+                (interp (multi-subst a (FunDefC-args fd) (FunDefC-body fd)) fds)
+                (error 'interp "ZODE: more than 1"))]))  ; Error if more than 1
 
 
+; (tstruct FunDefC ([name : Symbol] [arg : (Listof Symbol)] [body : ExprC]))
+; Interp-fns takes in a list of FunDefC and returns a Real
+(define (interp-fns [func : (Listof FunDefC)]) : Real
+  (match func
+      [(FunDefC name args body)
+       (if (= 1 (length args))
+           (interp body args)
+       (error 'interp-fns "ZODE : More than 1 args"))]))
+
+;(interp (map (lambda([arg : Symbol]) (multi-subst a arg (FunDefC-body fd))) (FunDefC-args fd)) fds))
+; multi subst, walk through the list and perform on the body, recursively call subst
+; Takes in a list of ExprC, recursively calls subst 
+(define (multi-subst [lst : (Listof ExprC)] [for : (Listof Symbol)] [in : ExprC]): ExprC
+  (if (null? for)
+      in
+      (let* ([arg (first lst)]
+             [param (first for)]
+             [rest-arg (rest lst)]
+             [rest-params (rest for)])
+        (subst arg param (multi-subst rest-arg rest-params in))))
+
+  )
+
+
+;;   (match lst
+;;     ['() in]; If an empty list return empty 
+;;     [(cons first rest)
+;;      (subst first for in) (multi-subst rest for in)])
+; subst takes in an ExprC, a Symbol, and another ExprC and returns an ExprC.
+(define (subst [what : ExprC] [for : Symbol] [in : ExprC]) : ExprC
+  (match in
+    [(NumC n) in]
+    [(AppC f args) (AppC f (map (lambda ([a : ExprC]) (subst what for a)) args))]))
 
 ; list of FunDefC and returns the FunDefC that matches n
 (define (get-fundef [n : Symbol] [fds : (Listof FunDefC)]) : FunDefC
@@ -137,15 +177,19 @@
        [(equal? n (FunDefC-name (first fds))) (first fds)]
        [else (get-fundef n (rest fds))])]))
 
-; subst takes in a BExprC, a Symbol, and another BExprC and returns a BExprC.
-(define (subst [what : ExprC] [for : Symbol] [in : ExprC]) : ExprC
-  (match in
-    [(NumC n) in]
-    [(AppC f a) (AppC f (subst what for a))]))
+
 
 ; top-interp takes in an s-expression and calls the parser and interp
-;; (define (top-interp [s : Sexp]) : Real
-;;   (interp (parse-prog s)))
+(: top-interp (Sexp -> Real))
+(define (top-interp fun-sexps)
+  (interp-fns (parse-prog fun-sexps)))
+
+; Parse a list of fundefs
+(define (parse-prog [sexp : Sexp]) : (Listof FunDefC)
+  (match sexp
+    ['() '()]
+    [(cons f r) (cons (parse-fundef f) (parse-prog r))]))
+ 
 
 ; --------- test-cases for all functions -----------
 
@@ -164,13 +208,13 @@
 (check-equal? (parse '(ifleq0? 4 5 6)) (ifleq0? (NumC 4) (NumC 5) (NumC 6)))
 (check-exn (regexp (regexp-quote "ZODE : expected s-expression"))
            (lambda () (parse 'a)))
-(check-exn (regexp (regexp-quote "ZODE : invalid binary"))
+(check-exn (regexp (regexp-quote " ZODE : expected s-expression, got '(4 5 6)"))
            (lambda () (parse '(4 5 6))))
 
 ; fundefList is a variable with a list of fundef's so we can
 ; pass in a list of fundef's into our functions for test cases easily
-(define fundefList (list (FunDefC 'foo 'a (NumC 4))
-                     (FunDefC 'throw_ball 'b (BinOpC '+ (NumC 5) (NumC 8)))))
+(define fundefList (list (FunDefC 'foo (list 'a 'b 'c) (NumC 4))
+                     (FunDefC 'throw_ball (list 'a 'b 'c) (BinOpC '+ (NumC 5) (NumC 8)))))
 
 
 ; test-cases for interp:
@@ -188,5 +232,5 @@
            (lambda () (interp (BinOpC '// (NumC 5) (NumC 5)) fundefList)))
 
 
-; test-cases for top-interp:
-; (check-equal? (top-interp 4) 4)
+
+

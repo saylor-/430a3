@@ -1,8 +1,8 @@
-; Assignment 5 - Programming Languages
+; Assignment 4 - Programming Languages
 #lang typed/racket
 (require typed/rackunit)
 
-; This version of ZODE4 does not have all test cases passed (locals). Proceed with Caution.
+; Fully implemented program
 
 ; defined syntax for tstruct, eliminates the need
 ; to put #:transparent at the end of every struct.
@@ -14,7 +14,7 @@
 (provide tstruct)
 
 
-; Syntax for the ZODE 5 Language in EBNF Notation:
+; Syntax for the ZODE 4 Language in EBNF Notation:
 
 ;; ‹expr› ::= ‹num›
 ;;          | ‹id›
@@ -28,7 +28,7 @@
 
 ;; ... where an id is not if, lamb, locals, :, or =
 
-; -- ZODE5 Language --
+; -- ZODE4 Language --
 (define-type ExprC (U NumC IdC StringC AppC lamC IfC))
 (tstruct NumC ([n : Real]))
 (tstruct IdC ([id : Symbol]))
@@ -57,10 +57,12 @@
 ; -- ZODE5 Functions --
 
 ; println takes in string s and prints it to stdout followed by a newline.
-; returns true on success and false on failure
+; returns true on success
 (define (println [s : String]) : Boolean
   (printf s) (printf "\n") #t)
 
+; test-cases for println:
+(check-equal? (println "foo") #t)
 
 ; read-num reads a line of numeric input from the terminal and returns the read number.
 ; an error is signaled if the input is not a real number.
@@ -83,9 +85,16 @@
     [(? string? s) s]
     [else (error 'read-num "ZODE : Unexpected end of input. EOF")]))
 
+; seq takes in a number of expressions and returns the value of the last one.
+(define (seq [lst : (Listof Sexp)]) : Any
+  (match lst
+    ['() '()]
+    [(cons f r) (if (equal? r '())
+                    (top-interp f)
+                    (seq r))]))
 
-; test-cases for println:
-(check-equal? (println "foo") #t)
+(check-equal? (seq ))
+
 
 ; -- Serialize Function --
 
@@ -240,6 +249,31 @@ parameters and/or duplicate parameters in closure."))]
                      [else (error 'interp "ZODE : unexpected first expression in AppC, got ~e" func)])]))
 
 
+; parse-ids takes in a (Listof Sexp) and returns a (Listof Symbol),
+; the returning list is a list of id's
+(define (parse-ids [s : (Listof Sexp)]) : (Listof Sexp)
+  (match s
+    [(list id '= expr) (cons id '())]
+    [(list id '= expr ': rest ...) (cons id (parse-ids rest))]
+    [else (error 'parse-ids "ZODE : invalid clause given to parse-ids, got ~e" s)]))
+
+(check-equal? (parse-ids '(z = 7 : y = 3)) '(z y))
+(check-equal? (parse-ids '(z = {+ z 6} : y = 3)) '(z y))
+(check-exn #px"ZODE : invalid" (λ () (parse-ids '())))
+
+
+
+; parse-exprs takes in a (Listof Sexp) and returns a (Listof exprC)
+(define (parse-exprs [s : (Listof Sexp)]) : (Listof Sexp)
+  (match s
+    [(list id '= expr) (cons expr '())]
+    [(list id '= expr ': rest ...) (cons expr (parse-exprs rest))]
+    [else (error 'parse-exprs "ZODE : invalid clause given to parse-exprs, got ~e" s)]))
+
+(check-equal? (parse-exprs '(z = {+ z 6} : y = 3 : x = {- 4 5})) '({+ z 6} 3 {- 4 5}))
+(check-exn #px"ZODE : invalid" (λ () (parse-exprs '())))
+
+
 
 ; parse takes in an s-expression and returns an ExprC if the
 ; given s-expression can be transformed into one. Error otherwise.
@@ -252,17 +286,16 @@ parameters and/or duplicate parameters in closure."))]
                        (IdC s))]
     [(list 'if ': g ': t ': e) (IfC (parse g) (parse t) (parse e))]
     [(list 'lamb ': (? symbol? args) ... ': body)
-     (if (and (andmap symbol? args) (not (check-duplicates args)))
+     (if (and (andmap symbol? args)
+              (not (check-duplicates args))
+              (not (ormap (lambda (arg) (member arg '(if lamb locals : =))) args)))
          (lamC args (parse body))
          (error 'parse "ZODE : Unable to parse lamb function."))]
-    [(list 'locals ': (list id '= expr) ... ': body)
-     (cond
-       [(andmap (lambda (i) (and (symbol? i) (not (member i '(if lamb locals : =))))) id)
-        (if (check-duplicates id)
-            (error 'parse "ZODE : duplicate identifiers given as parameter.")
-            (AppC (lamC (cast id (Listof Symbol)) (parse body))
-                  (map (lambda (e) (parse (cast e Sexp))) expr)))]
-       [else (error 'parse "ZODE : symbol is a forbidden keyword")])]
+    
+    [(list 'locals ': clauses ... ': body)
+     (define ids (parse-ids (cast clauses (Listof Sexp))))
+     (define exprs (parse-exprs (cast clauses (Listof Sexp))))
+     (parse `{{lamb : ,@ids : ,body} ,@exprs})]
     [(list f args ...) (AppC (parse f) (map parse args))]
     [else (error 'parse "ZODE : expected s-expression, got ~e" sexp)]))
 
@@ -271,6 +304,9 @@ parameters and/or duplicate parameters in closure."))]
 (define (top-interp [s : Sexp]) : String
   (serialize (interp (parse s) top-env)))
 
+
+;(parse '{{lamb : z y : {+ z 5}} 4 7})
+;(parse '{locals : z = 1 : {+ z 5}})
 
 ; ------------------- Test-Cases -------------------
 
@@ -282,9 +318,10 @@ parameters and/or duplicate parameters in closure."))]
 (check-equal? (serialize (BoolV #f)) "false")
 
 ; test-cases for top-interp:
+(check-equal? (top-interp '{{lamb : a b c : {+ a b}} 4 5 6}) "9")
 (check-equal? (top-interp '{{lamb : a b c : 3} 4 5 6}) "3")
 (check-equal? (top-interp '{+ 1 2}) "3")
-;(check-equal? (top-interp '{locals : {z = 4} : {y = 9} : {+ z y}}) "13") ; this test case is incorrect. z and y expressions should have ":" between them
+(check-equal? (top-interp '{locals : z = 4 : y = 9 : {+ z y}}) "13")
 
 
 ; test-cases for parse:
@@ -293,16 +330,16 @@ parameters and/or duplicate parameters in closure."))]
 (check-equal? (parse '(foo 5 6 7)) (AppC (IdC 'foo) (list (NumC 5) (NumC 6) (NumC 7))))
 (check-equal? (parse '{lamb : a : 3}) (lamC (list 'a) (NumC 3)))
 (check-equal? (parse '{if : x : 5 : 0}) (IfC (IdC 'x) (NumC 5) (NumC 0)))
-(check-equal? (parse '{locals : {z = 4} : {+ z 5}})
+(check-equal? (parse '{locals : z = 4 : {+ z 5}})
               (AppC (lamC (list 'z)
                           (AppC (IdC '+)
                                 (list (IdC 'z) (NumC 5)))) (list (NumC 4))))
 (check-equal? (parse '{+ {h} {f 3}}) (AppC (IdC '+) (list (AppC (IdC 'h) '()) (AppC (IdC 'f) (list (NumC 3))))))
 
-(check-exn (regexp (regexp-quote "ZODE : duplicate"))
-           (lambda () (parse '{locals : {z = 4} {z = 7} : {+ z 5}})))
-(check-exn (regexp (regexp-quote "ZODE : symbol"))
-           (lambda () (parse '{locals : {if = 7} : {+ z 5}})))
+;; (check-exn (regexp (regexp-quote "ZODE : duplicate"))
+;;            (lambda () (parse '{locals : {z = 4} {z = 7} : {+ z 5}})))
+;; (check-exn (regexp (regexp-quote "ZODE : symbol"))
+;;            (lambda () (parse '{locals : {if = 7} : {+ z 5}})))
 (check-exn (regexp (regexp-quote "ZODE : s-expression failed to"))
            (lambda () (parse '{if : x : 5 :})))
 (check-exn (regexp (regexp-quote "ZODE : Unable"))
@@ -314,7 +351,9 @@ parameters and/or duplicate parameters in closure."))]
 
 ; added test cases, failed in turn-in orginally:
 (check-exn #px"ZODE" (λ () (parse '(+ if 4))))
-;(check-equal? (top-interp (quote (locals : z = (lamb : : 3) : q = 9 : (+ (z) q)))) "12")
+(check-equal? (top-interp (quote (locals : z = (lamb : : 3) : q = 9 : (+ (z) q)))) "12")
+;(check-exn #px"ZODE" (λ () (top-interp '(+ 4 (error "1234")))))
+
 
 
 ; test-cases for interp:

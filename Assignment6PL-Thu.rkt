@@ -2,7 +2,7 @@
 #lang typed/racket
 (require typed/rackunit)
 
-; Fully implemented program, passing all test cases.
+; Non-working program. Working on adding mutation operations.
 
 ; defined syntax for tstruct, eliminates the need
 ; to put #:transparent at the end of every struct.
@@ -56,12 +56,13 @@
 
 
 ; -- Values --
-(define-type Value (U NumV BoolV StringV ClosV PrimOpV NullV))
+(define-type Value (U NumV BoolV StringV ClosV PrimOpV NullV ArrayV))
 (tstruct NumV ([n : Real]))
 (tstruct BoolV ([b : Boolean]))
 (tstruct StringV ([s : String]))
 (tstruct ClosV ([args : (Listof Symbol)] [body : ExprC] [env : Env]))
 (tstruct PrimOpV ([op : ((Listof Value) -> Value)]))
+(tstruct ArrayV ([loc : Location] [size : Natural]))
 (tstruct NullV ())
 
 (define-type-alias Location Natural)
@@ -71,9 +72,9 @@
 (define-type Env (Listof Binding))
 (define mt-env '())
 
+
 ; -- defined store --
 (define-type-alias Store (Mutable-Vectorof Value))
-
 
 
 ; -- Serialize Function --
@@ -86,7 +87,9 @@
     [(NumV n) (format "~v" n)]
     [(BoolV b) (if b "true" "false")]
     [(ClosV a b e) "#<procedure>"]
-    [(PrimOpV f) "#<primop>"]))
+    [(PrimOpV f) "#<primop>"]
+    [(ArrayV l s) "#<array>"]
+    [(NullV) "null"]))
 
 
 ; -- PrimOpV Functions for top-level env (Listof Value) -> (Value) --
@@ -116,7 +119,6 @@
     [else (error 'mult_func "ZODE : unable to multiply arguments ~e" lst)]))
 
 
-
 ; div_func takes in a (Listof Value) and returns a NumV result of the two values divided.
 (define (div_func [lst : (Listof Value)]) : NumV
   (match lst
@@ -128,14 +130,6 @@
     [else (error 'div_func "ZODE : unable to divide arguments ~e" lst)]))
 
 
-; ltoreq_func takes in a (Listof Value) and returns a boolean.
-(define (ltoreq_func [lst : (Listof Value)]) : BoolV
-  (match lst
-    ['() (error 'ltoreq_func "ZODE : unable to determine boolean value given an empty list.")]
-    [(list (NumV n1) (NumV n2)) (BoolV (<= n1 n2))]
-    [else (error 'ltoreq_func "ZODE : cannot determine <= with given values. ~e" lst)]))
-
-
 ; equal?_func takes in a (Listof Value) and returns a boolean.
 (define (equal?_func [lst : (Listof Value)]) : BoolV
   (match lst
@@ -143,45 +137,33 @@
     [else (error 'equal?_func "ZODE : unable to determine boolean value given an empty list.")]))
 
 
-; error_func takes in a (Listof Value) and returns nothing. (halts the program)
-(define (error_func [lst : (Listof Value)])
+; ltoreq_func takes in a (Listof Value) and returns a boolean.
+(define (ltoreq_func [lst : (Listof Value)]) : BoolV
   (match lst
-    ['() (error 'error_func "ZODE : no arguments given to error function.")]
-    [(list v) (error 'error_func "ZODE : user-error ~e" (serialize v))]))
+    ['() (error 'ltoreq_func "ZODE : unable to determine boolean value given an empty list.")]
+    [(list (NumV n1) (NumV n2)) (BoolV (<= n1 n2))]
+    [else (error 'ltoreq_func "ZODE : cannot determine <= with given values. ~e" lst)]))
 
-; -- ZODE5 Functions --
+; array_func takes in a (Listof Value) and a Store and returns an ArrayV.
+; array_func populates the store with given values.
+(define (array_func [vals : (Listof Value)] [sto : Store]) : ArrayV
+  (match vals
+    ['() (error 'array_func "ZODE : no values given to array_func.")]
+    [(list vals ...)
+     (define loc (allocate vals sto))
+     (ArrayV loc (length vals))]))
 
-; println takes in string s and prints it to stdout followed by a newline.
-; returns true on success, error on failure
-(define (println [s : (Listof Value)]) : BoolV
-  (match s
-    ['() (printf "\n") (BoolV #t)]
-    [(list (StringV s)) (printf s) (printf "\n") (BoolV #t)]
-    [else (error 'println "ZODE : Unexpected number of arguments given to println, got ~e" s)]))
-
-
-
-; read-num reads a line of numeric input from the terminal and returns the read number.
-; an error is signaled if the input is not a real number.
-(define (read-num [null : (Listof Value)]) : NumV
-  (display "> ")
-  (define user-input (read-line))
-  (match user-input
-    [(? string? s) (define num (string->number s))
-                   (if (and num (real? num))
-                       (NumV num)
-                       (error 'read-num "ZODE : unable to read the number. Expected a real"))]
-    [else (error 'read-num "ZODE : Unexpected end of input. EOF")]))
-
-
-
-; read-str reads a line of alphabetic input from the terminal and returns the read string.
-(define (read-str [null : (Listof Value)]) : StringV
-  (display "> ")
-  (define user-input (read-line))
-  (match user-input
-    [(? string? s) (StringV s)]
-    [else (error 'read-num "ZODE : Unexpected end of input. EOF")]))
+; make-array_func creates a fresh array of the given size, with all cells filled with the given value.
+; an error is thrown if an array tries to be created that is smaller that 1 cell. otherwise ArrayV is returned
+(define (make-array_func [vals : (Listof Value)] [sto : Store]) : ArrayV
+  (match vals
+    [(list (? NumV? s) val)
+     (define size (NumV-n s))
+     (if (natural? size)
+     (let () (define loc (allocate (make-list (cast size Natural) val) sto))
+       (ArrayV loc size))
+     (error 'make-array_func "ZODE : size of array must be a natural number ~e" size))]
+    [else (error 'make-array_func "ZODE : invalid arguments given ~e" vals)]))
 
 
 ; seq takes in a number of expressions and returns the value of the last one.
@@ -190,19 +172,11 @@
     ['() (error 'seq "ZODE : invalid number of arguments given to seq.")]
     [(list vals ...) (last vals)]))
 
-
-; ++ takes in a (Listof Value) and returns a StringV.
-; the function joins together the arguments into a single string.
-(define (++ [lst : (Listof Value)]) : StringV
-  (define strs
-    (map (lambda ([s : Value]) : String
-           (match s
-             [(StringV str) str]
-             [(NumV n) (number->string n)]
-             [(BoolV b) (if b "true" "false")]
-             [else (error '++ "ZODE : Unsupported value given for concatenation, got ~e" s)]))
-         lst))
-  (StringV (string-join strs "")))
+; error_func takes in a (Listof Value) and returns nothing. (halts the program)
+(define (error_func [lst : (Listof Value)])
+  (match lst
+    ['() (error 'error_func "ZODE : no arguments given to error function.")]
+    [(list v) (error 'error_func "ZODE : user-error ~e" (serialize v))]))
 
 
 ; -- top-level-env --
@@ -224,10 +198,10 @@
 
 ; -- top-level-store --
 (define (create-store [size : Natural]) : (Mutable-Vectorof Value)
-  (if (> size 15)
+  (if (> size 11)
       (let () (define top-store
                 (make-vector size (cast (NullV) Value)))
-        (define v (vector (NumV 15) ; slots 0 -> 14 are full, 15 is the first index for the next spot
+        (define v (vector (NumV 11) ; slots 0 -> 10 are full, 11 is the first index for the next spot
                           (BoolV #t)
                           (BoolV #f)
                           (PrimOpV add_func)
@@ -237,26 +211,21 @@
                           (PrimOpV ltoreq_func)
                           (PrimOpV equal?_func)
                           (PrimOpV error_func)
-                          (PrimOpV seq)
-                          (PrimOpV println)
-                          (PrimOpV read-num)
-                          (PrimOpV read-str)
-                          (PrimOpV ++)))
+                          (PrimOpV seq)))
         (vector-copy! top-store 0 (cast v (Mutable-Vectorof Value)))
         top-store)
       (error 'create-store "ZODE : store size must be greater than 15 to enable PrimOpV handling, got size ~e" size)))
 
-
 ; --- defined variables ---:
 
 ; testenv is a variable that is an Env so that we can test our environment functions.
-(define testenv (list (Binding 'x 7) (Binding 'y 8) (Binding 'z 9) (Binding 'p 19)))
+(define testenv (list (Binding 'x 7) (Binding 'y 8) (Binding 'z 9) (Binding 'p 27) (Binding 'm 4)))
 ;(define testenv2 (list (Binding 'func (ClosV '(a b c) (NumC 5) mt-env))))
 ;(define testenv3 (list (Binding 'x (NumV 3)) (Binding 'y (NumV 4)) (Binding 'z (NumV 5))))
 
 ; teststo is a variable that is a store so we can test our functions.
-(define teststo (create-store 50))
-
+(define teststo (create-store 100))
+(define teststo-small (create-store 12))
 
 ; lookup takes in an a Symbol and a (Listof Binding) and returns a Real
 ; (the value that maps to the symbol)
@@ -269,15 +238,32 @@
        [(equal? id (Binding-name (first env))) (Binding-loc (first env))]
        [else (lookup id (rest env))])]))
 
+
 ; fetch takes in a Location and returns the value mapped to that location
 (define (fetch [loc : Location] [sto : Store]) : Value
   (vector-ref sto loc))
 
-; allocate takes in a Value, Location, and a Store and updates the storage position with
-; the value at the given location
-(define (allocate [val : Value] [loc : Location] [sto : Store]) : NullV
+
+; mutate takes in a value, a location, and a store updates the value mapped at given location in the store.
+; returns NullV
+(define (mutate [val : Value] [loc : Location] [sto : Store]) : NullV
   (begin (vector-set! sto loc val)
          (NullV)))
+
+
+; allocate takes in a (Listof Value) and a Store an places the values in the next available locations in the store.
+; throws an error if the values are not able to be placed into the store or if the store is full. Otherwise returns
+; the base location.
+(define (allocate [vals : (Listof Value)] [sto : Store]) : Location
+  (define loc (cast (NumV-n (cast (vector-ref sto 0) NumV)) Location))
+  (define free-loc (cast (+ loc (length vals)) Location))
+  (if (<= free-loc (- (vector-length sto) 1)) ; check to make sure we still have memory left to add the values
+      (begin
+        (for ([i (in-range (length vals))]) ; put each value into the store
+          (vector-set! sto (cast (+ loc i) Location) (list-ref vals i)))
+        (mutate (NumV free-loc) 0 sto); update index 0 of the store to indicate our next free location in memory
+        loc)
+      (error 'allocate "ZODE : not enough memory in store to allocate given values."))) ; return base address
 
 
 ; add-to-env takes in a Symbol, a Real, and an environment and adds the Symbol Real pair to the environment.
@@ -309,7 +295,7 @@
     [(IdC id) (fetch (lookup id env) sto)]
     [(lamC a b) (ClosV a b env)]
     [(MutC s val) (define loc (lookup s env))
-                  (allocate (interp val env sto) loc sto)]
+                  (mutate (interp val env sto) loc sto)]
     ;;     [(IfC g t e) (match (interp g env)
     ;;                    [(BoolV #t) (interp t env)]
     ;;                    [(BoolV #f) (interp e env)]
@@ -338,10 +324,6 @@
     [(list id '= expr ': rest ...) (cons id (parse-ids rest))]
     [else (error 'parse-ids "ZODE : invalid clause given to parse-ids, got ~e" s)]))
 
-(check-equal? (parse-ids '(z = 7 : y = 3)) '(z y))
-(check-equal? (parse-ids '(z = {+ z 6} : y = 3)) '(z y))
-(check-exn #px"ZODE : invalid" (λ () (parse-ids '())))
-
 
 ; parse-exprs takes in a (Listof Sexp) and returns a (Listof exprC)
 (define (parse-exprs [s : (Listof Sexp)]) : (Listof Sexp)
@@ -349,10 +331,6 @@
     [(list id '= expr) (cons expr '())]
     [(list id '= expr ': rest ...) (cons expr (parse-exprs rest))]
     [else (error 'parse-exprs "ZODE : invalid clause given to parse-exprs, got ~e" s)]))
-
-(check-equal? (parse-exprs '(z = {+ z 6} : y = 3 : x = {- 4 5})) '({+ z 6} 3 {- 4 5}))
-(check-exn #px"ZODE : invalid" (λ () (parse-exprs '())))
-
 
 
 ; parse takes in an s-expression and returns an ExprC if the
@@ -386,57 +364,12 @@
   (serialize (interp (parse s) top-env teststo)))
 
 
-; ZODE5 Program of our own - This program takes an integer from
-; the user and calculates the factorial of the user's number
-(define prog '{locals
-               : cons = {lamb : f r :
-                              {lamb : key :
-                                    {if : {equal? key 0}
-                                        : f
-                                        : r}}}
-               : first = {lamb : pair :
-                               {pair 0}}
-               : rest = {lamb : pair :
-                              {pair 1}}
-               : {locals
-                  : fact = {lamb : n self :
-                                 {if : {equal? n 1}
-                                     : 1
-                                     : {* n {self {- n 1} self}}}}
-                  : {seq
-                     {println "Enter an integer to calculate its factorial: "}
-                     {locals : user-num = {read-num}
-                             : {println {++ "The factorial of " user-num " is " {fact user-num fact} "."}}}}}})
-
-
-;(top-interp prog)
-
 ; ------------------- Test-Cases -------------------
-
-;(top-interp '{locals : your-number = {read-num} : y = 7 : {+ your-number y}})
-
-; test-cases for println:
-;(check-equal? (println '()) (BoolV #t))
-;(check-equal? (println (list (StringV "foo"))) (BoolV #t))
-(check-exn #px"ZODE : Unexpected" (λ () (println (list (StringV "foo") (StringV "bob")))))
 
 
 ; test-cases for seq:
 (check-equal? (seq (list (StringV "ok") (BoolV #t) (NumV 5))) (NumV 5))
 (check-exn #px"ZODE : invalid" (λ () (seq '())))
-
-
-; test-cases for ++:
-(check-equal? (++ (list (StringV "hello") (StringV "world"))) (StringV "helloworld"))
-(check-equal? (++ (list (StringV "hello") (NumV 4) (StringV "world"))) (StringV "hello4world"))
-(check-equal? (++ (list (StringV "hello") (StringV "world") (NumV 5))) (StringV "helloworld5"))
-(check-equal? (++ (list (StringV "hello") (StringV "world") (NumV 5) (BoolV #t))) (StringV "helloworld5true"))
-(check-equal? (++ (list (StringV "hello") (StringV "world") (NumV 5) (BoolV #f))) (StringV "helloworld5false"))
-(check-exn #px"ZODE : Unsupported" (λ () (++ (list (StringV "hello")
-                                                   (StringV "world") (NumV 5)
-                                                   (BoolV #f) (ClosV (list 'a) (NumC 5) testenv)))))
-(check-equal? (++ '()) (StringV ""))
-
 
 
 ; test-cases for serialize:
@@ -446,6 +379,8 @@
 (check-equal? (serialize (NumV 5)) "5")
 (check-equal? (serialize (BoolV #t)) "true")
 (check-equal? (serialize (BoolV #f)) "false")
+(check-equal? (serialize (ArrayV 10 50)) "#<array>")
+(check-equal? (serialize (NullV)) "null")
 
 ; test-cases for top-interp:
 ;; (check-equal? (top-interp '{{lamb : a b c : {+ a b}} 4 5 6}) "9")
@@ -487,8 +422,16 @@
 ;; (check-equal? (top-interp (quote (locals : z = (lamb : : 3) : q = 9 : (+ (z) q)))) "12")
 (check-exn #px"ZODE" (λ () (top-interp '(+ 4 (error "1234")))))
 
-; Zode 5 ---
-;; (check-equal? (top-interp (quote (++ "abc"))) "\"abc\"")
+
+; test-cases for parse-exprs:
+(check-equal? (parse-exprs '(z = {+ z 6} : y = 3 : x = {- 4 5})) '({+ z 6} 3 {- 4 5}))
+(check-exn #px"ZODE : invalid" (λ () (parse-exprs '())))
+
+
+; test-cases for parse-ids:
+(check-equal? (parse-ids '(z = 7 : y = 3)) '(z y))
+(check-equal? (parse-ids '(z = {+ z 6} : y = 3)) '(z y))
+(check-exn #px"ZODE : invalid" (λ () (parse-ids '())))
 
 
 ; test-cases for interp:
@@ -496,9 +439,12 @@
 (check-equal? (interp (StringC "yo") testenv teststo) (StringV "yo"))
 (check-equal? (interp (IdC 'p) testenv teststo) (NullV))
 (check-equal? (interp (lamC '(x y z) (NumC 5)) testenv teststo) (ClosV '(x y z) (NumC 5) testenv))
+(check-equal? (interp (MutC 'm (NumC 7)) testenv teststo) (NullV))
+(check-exn #px"ZODE : unexpected first" (λ () (interp (AppC (NumC 5) (list (NumC 3) (NumC 4))) testenv teststo)))
+(check-exn #px"ZODE : unimplemented" (λ () (interp (IfC (NumC 3) (NumC 1) (NumC 2)) top-env teststo)))
+
 ;; (check-equal? (interp (IfC (IdC 'false) (NumC 1) (NumC 2)) top-env) (NumV 2))
 ;; (check-equal? (interp (IfC (IdC 'true) (NumC 1) (NumC 2)) top-env) (NumV 1))
-;; (check-exn #px"ZODE : unable" (λ () (interp (IfC (NumC 3) (NumC 1) (NumC 2)) top-env)))
 ;; (check-equal? (interp (AppC (lamC '(x y) (NumC 5)) (list (NumC 3) (NumC 4))) testenv) (NumV 5))
 ;; (check-equal? (interp (AppC (lamC '(x y) (AppC (IdC '+) (list (NumC 5) (NumC 6))))
 ;;                              (list (NumC 3) (NumC 4))) top-env teststo) (NumV 11))
@@ -510,6 +456,7 @@
 
 ; test-cases for extend-env:
 (check-exn #px"ZODE : Lists" (λ () (extend-env mt-env '(a b) (list 4 5 6 7))))
+(check-equal? (extend-env testenv '() '()) testenv)
 
 
 ; test-cases for add-to-env:
@@ -517,6 +464,38 @@
 (check-equal? (add-to-env 'a 4 (list (Binding 'x 7) (Binding 'y 14)))
               (list (Binding 'a 4)(Binding 'x 7) (Binding 'y 14)))
 
+; test-cases for allocate: NOTE ** the test cases below for allocate
+; and array_func depend on the use use of teststo. Don't rearrange the order of the test cases.
+(check-equal? (allocate (list (NumV 10) (NumV 20) (NumV 30)) teststo) 11) ; 11 should be the base address of the list of values
+(display (fetch 0 teststo)) ; this number should be 14 (next available spot in memory)
+(newline)
+
+(check-equal? (allocate (list (NumV 10) (NumV 20) (NumV 30) (NumV 40) (NumV 50)
+                              (NumV 60) (NumV 70) (NumV 80) (NumV 90) (NumV 100)) teststo) 14)
+(display (fetch 0 teststo)) ; this number should be 24 (next available spot in memory)
+
+(check-exn #px"ZODE : not" (λ () (allocate (list (NumV 10) (NumV 20) (NumV 30) (NumV 40)
+                                                 (NumV 50) (NumV 60) (NumV 70) (NumV 80)
+                                                 (NumV 90) (NumV 100) (NumV 110) (NumV 120)) teststo-small)))
+
+; test-cases for array_func:
+(check-exn #px"ZODE : no values given" (λ () (array_func '() teststo)))
+(check-equal? (array_func (list (NumV 1) (NumV 2) (NumV 3)) teststo) (ArrayV 24 3))
+
+; test-cases for make-array_func:
+(check-equal? (make-array_func (list (NumV 1) (BoolV #t)) teststo) (ArrayV 27 1))
+(check-exn #px"ZODE : size" (λ () (make-array_func (list (NumV 1.34) (BoolV #t)) teststo)))
+(check-exn #px"ZODE : invalid" (λ () (make-array_func (list (NumV 1.34) (NumV 3) (NumV 5)) teststo)))
+
+; test-cases recommended in spec with the equal? binop:
+;(check-equal? (array_func (list  (NumV 2) (NumV 3)) teststo) (ArrayV 24 3))
+
+
+; test-cases for mutate:
+(check-equal? (mutate (NumV 4) 30 teststo) (NullV))
+
+; test-cases for create-store:
+(check-exn #px"ZODE : store size" (λ () (create-store 5)))
 
 ; test-cases for lookup:
 (check-exn #px"ZODE : empty environment" (λ () (lookup 'a mt-env)))
@@ -533,7 +512,6 @@
 (check-equal? (equal?_func (list (StringV "hello") (StringV "world"))) (BoolV #f))
 (check-equal? (equal?_func (list (BoolV #f) (BoolV #f))) (BoolV #t))
 (check-exn #px"ZODE : unable" (λ () (equal?_func '())))
-
 
 ; test-cases for ltoreq_func:
 (check-equal? (ltoreq_func (list (NumV 1) (NumV 2))) (BoolV #t))
